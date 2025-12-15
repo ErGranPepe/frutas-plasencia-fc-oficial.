@@ -1,23 +1,4 @@
-const sqlite3 = require('sqlite3').verbose();
-const path = require('path');
-
-const fs = require('fs');
-
-// Use DATA_DIR env var if set (host usage), otherwise default to local 'data' folder
-const dataDir = process.env.DATA_DIR || path.resolve(__dirname, 'data');
-
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
-const dbPath = path.resolve(dataDir, 'database.sqlite');
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error('Error opening database', err.message);
-  } else {
-    console.log('Connected to the SQLite database.');
-    initDb();
-  }
-});
+const db = require('./db-adapter');
 
 const INITIAL_ROSTER = [
   {
@@ -131,92 +112,96 @@ const NEXT_MATCH = {
   location: "Campo 2"
 };
 
-function initDb() {
-  db.serialize(() => {
-    // 1. Players Table
-    db.run(`CREATE TABLE IF NOT EXISTS players (
-      id TEXT PRIMARY KEY,
-      number INTEGER,
-      name TEXT,
-      position TEXT,
-      nickname TEXT,
-      photo TEXT,
-      age TEXT,
-      job TEXT,
-      bio TEXT,
-      tags TEXT,
-      stats TEXT
-    )`);
+async function initDb() {
+  console.log("Checking database schema...");
 
-    // 2. Matches Table
-    db.run(`CREATE TABLE IF NOT EXISTS matches (
-      id TEXT PRIMARY KEY,
-      opponent TEXT,
-      ourScore INTEGER,
-      theirScore INTEGER,
-      result TEXT,
-      date TEXT
-    )`);
+  // 1. Players Table
+  await db.run(`CREATE TABLE IF NOT EXISTS players (
+    id TEXT PRIMARY KEY,
+    number INTEGER,
+    name TEXT,
+    position TEXT,
+    nickname TEXT,
+    photo TEXT,
+    age TEXT,
+    job TEXT,
+    bio TEXT,
+    tags TEXT,
+    stats TEXT
+  )`);
 
-    // 3. News Table
-    db.run(`CREATE TABLE IF NOT EXISTS news (
-      id TEXT PRIMARY KEY,
-      title TEXT,
-      date TEXT,
-      type TEXT,
-      content TEXT
-    )`);
+  // 2. Matches Table
+  await db.run(`CREATE TABLE IF NOT EXISTS matches (
+    id TEXT PRIMARY KEY,
+    opponent TEXT,
+    ourScore INTEGER,
+    theirScore INTEGER,
+    result TEXT,
+    date TEXT
+  )`);
 
-    // 4. Settings Table (Key-Value)
-    db.run(`CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY,
-      value TEXT
-    )`);
+  // 3. News Table
+  await db.run(`CREATE TABLE IF NOT EXISTS news (
+    id TEXT PRIMARY KEY,
+    title TEXT,
+    date TEXT,
+    type TEXT,
+    content TEXT
+  )`);
 
-    // Check if seeded
-    db.get("SELECT count(*) as count FROM players", (err, row) => {
-      if (row.count === 0) {
-        console.log("Seeding Players...");
-        const stmt = db.prepare("INSERT INTO players VALUES (?,?,?,?,?,?,?,?,?,?,?)");
-        INITIAL_ROSTER.forEach(p => {
-          stmt.run(p.id, p.number, p.name, p.position, p.nickname || '', p.photo, String(p.age), p.job, p.bio, p.tags, p.stats);
-        });
-        stmt.finalize();
-      }
-    });
+  // 4. Settings Table (Key-Value)
+  await db.run(`CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+  )`);
 
-    db.get("SELECT count(*) as count FROM matches", (err, row) => {
-      if (row.count === 0) {
-        console.log("Seeding Matches...");
-        const stmt = db.prepare("INSERT INTO matches VALUES (?,?,?,?,?,?)");
-        RECENT_MATCHES.forEach(m => {
-          stmt.run(m.id, m.opponent, m.ourScore, m.theirScore, m.result, m.date || '');
-        });
-        stmt.finalize();
-      }
-    });
+  // Check if seeded
+  const pCount = await db.get("SELECT count(*) as count FROM players");
+  // sqlite3 returns { count: N }, libsql returns [ { count: N } ] via our adapter usually but we handled it
+  // Let's normalize access
+  const countVal = pCount ? (pCount.count || Object.values(pCount)[0]) : 0;
 
-    db.get("SELECT count(*) as count FROM news", (err, row) => {
-      if (row.count === 0) {
-        console.log("Seeding News...");
-        const stmt = db.prepare("INSERT INTO news VALUES (?,?,?,?,?)");
-        INITIAL_NEWS.forEach(n => {
-          stmt.run(n.id, n.title, n.date, n.type, n.content);
-        });
-        stmt.finalize();
-      }
-    });
+  if (countVal === 0) {
+    console.log("Seeding Players...");
+    for (const p of INITIAL_ROSTER) {
+      await db.run("INSERT INTO players VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [p.id, p.number, p.name, p.position, p.nickname || '', p.photo, String(p.age), p.job, p.bio, p.tags, p.stats]
+      );
+    }
+  }
 
-    db.get("SELECT count(*) as count FROM settings", (err, row) => {
-      if (row.count === 0) {
-        console.log("Seeding Settings...");
-        const stmt = db.prepare("INSERT INTO settings VALUES (?,?)");
-        stmt.run("nextMatch", JSON.stringify(NEXT_MATCH));
-        stmt.run("teamPhoto", "https://images.unsplash.com/photo-1522770179533-24471fcdba45?w=1200&auto=format&fit=crop&q=60");
-        stmt.finalize();
-      }
-    });
-  });
+  const mCount = await db.get("SELECT count(*) as count FROM matches");
+  const mCountVal = mCount ? (mCount.count || Object.values(mCount)[0]) : 0;
+  if (mCountVal === 0) {
+    console.log("Seeding Matches...");
+    for (const m of RECENT_MATCHES) {
+      await db.run("INSERT INTO matches VALUES (?,?,?,?,?,?)",
+        [m.id, m.opponent, m.ourScore, m.theirScore, m.result, m.date || '']
+      );
+    }
+  }
+
+  const nCount = await db.get("SELECT count(*) as count FROM news");
+  const nCountVal = nCount ? (nCount.count || Object.values(nCount)[0]) : 0;
+  if (nCountVal === 0) {
+    console.log("Seeding News...");
+    for (const n of INITIAL_NEWS) {
+      await db.run("INSERT INTO news VALUES (?,?,?,?,?)",
+        [n.id, n.title, n.date, n.type, n.content]
+      );
+    }
+  }
+
+  const sCount = await db.get("SELECT count(*) as count FROM settings");
+  const sCountVal = sCount ? (sCount.count || Object.values(sCount)[0]) : 0;
+  if (sCountVal === 0) {
+    console.log("Seeding Settings...");
+    await db.run("INSERT INTO settings VALUES (?,?)", ["nextMatch", JSON.stringify(NEXT_MATCH)]);
+    await db.run("INSERT INTO settings VALUES (?,?)", ["teamPhoto", "https://images.unsplash.com/photo-1522770179533-24471fcdba45?w=1200&auto=format&fit=crop&q=60"]);
+  }
 }
+
+// Auto-run init
+initDb().catch(err => console.error("DB Init Failed:", err));
 
 module.exports = db;
