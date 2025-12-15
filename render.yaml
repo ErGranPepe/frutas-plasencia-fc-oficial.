@@ -8,9 +8,4 @@ services:
     envVars:
       - key: PORT
         value: 3000
-      - key: DATA_DIR
-        value: /var/data
-    disk:
-      name: sqlite-data
-      mountPath: /var/data
-      sizeGB: 1
+
